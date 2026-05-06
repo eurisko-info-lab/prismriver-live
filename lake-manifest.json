@@ -1,0 +1,15 @@
+{"version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"url": "https://github.com/lenianiva/Prismriver",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "cb44abffb46ce2cd0784ba0d881621119acf5741",
+   "name": "Prismriver",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "main",
+   "inherited": false,
+   "configFile": "lakefile.lean"}],
+ "name": "prismriver_live",
+ "lakeDir": ".lake"}

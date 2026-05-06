@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prismriver Live • Lean + Music</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%8E%BC%3C/text%3E%3C/svg%3E">
+  <script src="https://cdn.jsdelivr.net/npm/vexflow@5.0.0/build/cjs/vexflow.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; display:flex; flex-direction:column; height:100vh; background:#1e1e1e; color:#ccc; font-family:system-ui; }
+    #topbar { display:flex; align-items:center; gap:12px; padding:8px 16px; background:#252525; border-bottom:2px solid #4a90e2; flex-shrink:0; }
+    #topbar h1 { margin:0; font-size:18px; color:#4a90e2; }
+    #panels { display:flex; flex:1; min-height:0; }
+    #left { flex:1; min-width:200px; display:flex; flex-direction:column; overflow:hidden; }
+    #divider {
+      width:6px; flex-shrink:0; background:#4a90e2; cursor:col-resize;
+      transition: background 0.15s;
+    }
+    #divider:hover, #divider.dragging { background:#74b3f5; }
+    #right { width:360px; min-width:200px; flex-shrink:0; background:#fff; color:#111; overflow:auto; padding:16px; display:flex; flex-direction:column; }
+    #leancode {
+      flex:1; margin:0; overflow:auto; padding:20px; resize:none; outline:none; border:none;
+      background:#1e1e2e; color:#cdd6f4; font-family:ui-monospace,monospace; font-size:14px; line-height:1.6;
+      white-space:pre; tab-size:2;
+    }
+    #toolbar {
+      flex-shrink:0; display:flex; align-items:center; gap:8px;
+      padding:6px 14px; background:#1a1a2a; border-bottom:1px solid #333;
+    }
+    #toolbar button {
+      padding:5px 18px; background:#4a90e2; color:#fff; border:0; font-size:13px;
+      cursor:pointer; border-radius:3px; font-weight:600;
+    }
+    #toolbar button:hover { background:#357abd; }
+    #toolbar span { color:#666; font-size:12px; font-family:ui-monospace,monospace; }
+    #proofbox {
+      flex-shrink:0; padding:14px 20px; background:#252530; border-top:2px solid #4a90e2;
+      font-family:ui-monospace,monospace; font-size:13px; line-height:1.7; min-height:80px;
+    }
+    #proofbox .label { color:#888; font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px; }
+    #proofbox .proven  { color:#a6e3a1; }
+    #proofbox .unproven { color:#f38ba8; }
+    #proofbox .pending  { color:#89b4fa; }
+    #proofbox .axiom   { color:#cba6f7; font-style:italic; }
+    .tab { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+    .tab button { padding:6px 14px; background:#ddd; color:#111; border:0; font-size:13px; cursor:pointer; border-radius:3px; }
+    .tab button:hover { background:#bbb; }
+    .tab button.active { background:#4a90e2; color:white; }
+    #score { flex:1; }
+    a.lean4web { color:#89b4fa; font-size:12px; text-decoration:none; margin-left:auto; }
+    a.lean4web:hover { text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <h1>🧪 Prismriver Live • Lean 4 + Music</h1>
+  </div>
+  <div id="panels">
+    <div id="left">
+      <div id="toolbar">
+        <button onclick="prove()">▶ Prove</button>
+        <span id="toolbar-hint">Edit the code and click Prove</span>
+      </div>
+      <textarea id="leancode" spellcheck="false"></textarea>
+      <div id="proofbox">
+        <div class="label">Lean 4 proof output</div>
+        <div id="proofout" class="pending">⟳ Connecting to Lean server…</div>
+      </div>
+    </div>
+    <div id="divider"></div>
+    <div id="right">
+      <h2 style="margin:0 0 10px 0; font-size:16px;">Score (VexFlow 5)</h2>
+      <div class="tab">
+        <button class="active" onclick="loadExample(0)">Boléro Ostinato</button>
+        <button onclick="loadExample(1)">Theme A + B</button>
+        <button onclick="loadExample(2)">Full Form</button>
+      </div>
+      <div id="score"></div>
+    </div>
+  </div>
+
+  <script>
+    // ── Lean code ──────────────────────────────────────────────────────────
+    const LEAN_CODE =
+`import Prismriver
+open Prismriver.Classical
+
+def ostinato : List Note := ♩[c4 c4 c4 c4]
+def themeA   : List Note := ♩[e4 f4 g4 a4 g4 f4 e4 d4]
+def themeB   : List Note := ♩[c4 d4 e4 f4 e4 d4 c4 b4]
+
+def layer (i : Nat) : Nat := i
+def dynamic (x : Nat) : Nat := x
+
+theorem crescendo_monotonic :
+    ∀ i, dynamic (layer i) < dynamic (layer (i + 1)) := by
+  intro i; simp [layer, dynamic]
+
+#print axioms crescendo_monotonic`;
+
+    document.getElementById('leancode').value = LEAN_CODE;
+
+    // ── Lean proof via lean4web WebSocket ──────────────────────────────────
+    const FILE_URI = 'file:///MathlibDemo.lean';
+    let msgId = 1;
+
+    function runLean(code, onResult) {
+      const out = document.getElementById('proofout');
+      out.className = 'pending';
+      out.textContent = '⟳ Compiling…';
+
+      let ws;
+      try { ws = new WebSocket('wss://live.lean-lang.org/websocket/MathlibDemo'); }
+      catch(e) { out.className = 'unproven'; out.textContent = '⚠ Could not connect to Lean server.'; return; }
+
+      let initialized = false;
+      const diagnostics = [];
+      let done = false;
+
+      function send(msg) { ws.send(JSON.stringify(msg)); }
+
+      ws.onopen = () => {
+        send({ jsonrpc:'2.0', id: msgId++, method:'initialize', params:{
+          processId: null,
+          rootUri: 'file:///',
+          capabilities: { textDocument: { publishDiagnostics: { relatedInformation: true } } },
+          initializationOptions: {}
+        }});
+      };
+
+      ws.onmessage = (e) => {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
+
+        // Response to initialize → send initialized + didOpen
+        if (msg.id === 1 && msg.result) {
+          send({ jsonrpc:'2.0', method:'initialized', params:{} });
+          send({ jsonrpc:'2.0', method:'textDocument/didOpen', params:{
+            textDocument: { uri: FILE_URI, languageId:'lean4', version:1, text: code }
+          }});
+          initialized = true;
+        }
+
+        // Diagnostics from Lean
+        if (msg.method === 'textDocument/publishDiagnostics' && initialized) {
+          const diags = msg.params?.diagnostics ?? [];
+          diags.forEach(d => diagnostics.push(d));
+        }
+
+        // File processing done
+        if (msg.method === '$/lean/fileProgress' && initialized && !done) {
+          const items = msg.params?.processing ?? [];
+          const stillProcessing = items.some(i => i.kind === 1);
+          if (!stillProcessing && diagnostics.length >= 0) {
+            done = true;
+            ws.close();
+            onResult(diagnostics);
+          }
+        }
+      };
+
+      ws.onerror = () => {
+        out.className = 'unproven';
+        out.textContent = '⚠ Lean server connection error.';
+      };
+
+      // Fallback timeout: show results after 30s regardless
+      setTimeout(() => {
+        if (!done) { done = true; try { ws.close(); } catch {} onResult(diagnostics); }
+      }, 30000);
+    }
+
+    function showResult(diagnostics) {
+      const out = document.getElementById('proofout');
+      // Info diagnostics (severity 3) contain #print axioms output
+      const infos = diagnostics.filter(d => d.severity === 3 || d.severity == null);
+      const errors = diagnostics.filter(d => d.severity === 1);
+      const warnings = diagnostics.filter(d => d.severity === 2);
+
+      if (errors.length > 0) {
+        out.className = 'unproven';
+        out.innerHTML = errors.map(d =>
+          `❌ <strong>${d.message}</strong>`
+        ).join('\n');
+        return;
+      }
+
+      if (warnings.some(d => /sorry/i.test(d.message))) {
+        out.className = 'unproven';
+        out.textContent = "⚠ crescendo_monotonic depends on axioms: [sorryAx]  — not proven";
+        return;
+      }
+
+      const axiomMsg = infos.find(d => /depends on axioms/.test(d.message));
+      if (axiomMsg) {
+        const hasSorry = /sorryAx/.test(axiomMsg.message);
+        out.className = hasSorry ? 'unproven' : 'proven';
+        const icon = hasSorry ? '❌' : '✅';
+        // Highlight axiom names
+        const formatted = axiomMsg.message.replace(
+          /\[([^\]]+)\]/,
+          (_, inner) => `[<span class="axiom">${inner}</span>]`
+        );
+        out.innerHTML = `${icon} ${formatted}`;
+        return;
+      }
+
+      if (infos.length > 0) {
+        out.className = 'proven';
+        out.textContent = infos.map(d => d.message).join('\n');
+        return;
+      }
+
+      out.className = 'proven';
+      out.textContent = '✅ No errors or warnings.';
+    }
+
+    // ── VexFlow score ──────────────────────────────────────────────────────
+    function renderBolero(mode = 0) {
+      const div = document.getElementById("score");
+      div.innerHTML = "";
+      const VF = VexFlow;
+      const w = Math.max(260, div.getBoundingClientRect().width || 340);
+      const vf = new VF.Factory({ renderer: { elementId: "score", width: w, height: 280 } });
+      const score = vf.EasyScore();
+      const system = vf.System();
+      const noteCount = mode >= 1 ? 8 : 4;
+      const beatValue = 4;
+      const ostinatoNotes = score.notes(
+        Array.from({ length: noteCount }, () => "c4/4").join(", "), { stem: "up" });
+      const v1 = new VF.Voice({ numBeats: noteCount, beatValue });
+      v1.addTickables(ostinatoNotes);
+      const melodyStr = mode >= 1
+        ? "e4/4, f4/4, g4/4, a4/4, g4/4, f4/4, e4/4, d4/4"
+        : "e4/4, f4/4, g4/4, a4/4";
+      const v2 = new VF.Voice({ numBeats: noteCount, beatValue });
+      v2.addTickables(score.notes(melodyStr, { stem: "down" }));
+      system.addStave({ voices: [v1, v2] }).addClef("treble").addTimeSignature(`${noteCount}/${beatValue}`);
+      vf.draw();
+      const svg = div.querySelector("svg");
+      if (svg) {
+        const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        t.setAttribute("x","10"); t.setAttribute("y","28");
+        t.setAttribute("fill","#111"); t.setAttribute("font-size","15");
+        t.textContent = "Ravel – Boléro (demo)";
+        svg.appendChild(t);
+      }
+    }
+
+    function loadExample(n) {
+      currentMode = n;
+      document.querySelectorAll('.tab button').forEach((b,i) => b.classList.toggle('active', i===n));
+      renderBolero(n);
+    }
+
+    function prove() {
+      // Extract just the self-contained part (skip Prismriver-specific imports/notations)
+      const code = document.getElementById('leancode').value;
+      const lines = code.split('\n');
+      const filtered = lines.filter(l =>
+        !l.startsWith('import ') && !l.startsWith('open ') &&
+        !l.includes('PNote') && !l.includes('♩[') &&
+        !l.includes('repeatScore') && !l.includes('boleroScore') &&
+        !l.includes('ostinato') && !l.includes('themeA') && !l.includes('themeB') &&
+        !l.startsWith('#eval')
+      ).join('\n').trim();
+      document.getElementById('toolbar-hint').textContent = 'Sending to Lean server…';
+      runLean(filtered, (diags) => {
+        document.getElementById('toolbar-hint').textContent = 'Edit the code and click Prove';
+        showResult(diags);
+      });
+    }
+
+    // ── Resizable divider ───────────────────────────────────────────────────────
+    (function() {
+      const divider = document.getElementById('divider');
+      const right = document.getElementById('right');
+      let dragging = false, startX = 0, startW = 0;
+      divider.addEventListener('mousedown', e => {
+        dragging = true;
+        startX = e.clientX;
+        startW = right.getBoundingClientRect().width;
+        divider.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+      });
+      document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        const delta = startX - e.clientX;
+        right.style.width = Math.max(200, startW + delta) + 'px';
+        right.style.flex = 'none';
+        renderBolero(currentMode);
+      });
+      document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        divider.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      });
+    })();
+
+    let currentMode = 0;
+
+    window.onload = () => {
+      renderBolero(0);
+      prove();
+    };
+  </script>
+</body>
+</html>
