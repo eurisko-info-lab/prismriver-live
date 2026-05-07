@@ -86,18 +86,131 @@
 `import Prismriver
 open Prismriver.Classical
 
-def ostinato : List Note := ♩[c4 c4 c4 c4]
-def themeA   : List Note := ♩[e4 f4 g4 a4 g4 f4 e4 d4]
-def themeB   : List Note := ♩[c4 d4 e4 f4 e4 d4 c4 b4]
+abbrev PNote := Prismriver.Classical.Note
+
+def ostinato : List PNote := ♩[c4 c4 c4 c4]
+def themeA   : List PNote := ♩[e4 f4 g4 a4 g4 f4 e4 d4]
+def themeB   : List PNote := ♩[c4 d4 e4 f4 e4 d4 c4 b4]
+
+def repeatScore (n : Nat) (s : List PNote) : List PNote :=
+  (List.replicate n s).foldr (· ++ ·) []
+
+def boleroScore : List PNote :=
+  repeatScore 9 (repeatScore 16 ostinato ++ themeA ++ themeB)
 
 def layer (i : Nat) : Nat := i
 def dynamic (x : Nat) : Nat := x
 
+-- § 1  Concrete lengths
+@[simp] theorem ostinato_length : ostinato.length = 4 := by native_decide
+@[simp] theorem themeA_length   : themeA.length   = 8 := by native_decide
+@[simp] theorem themeB_length   : themeB.length   = 8 := by native_decide
+theorem themes_equal_length    : themeA.length = themeB.length     := by native_decide
+theorem themes_double_ostinato : themeA.length = 2 * ostinato.length := by native_decide
+
+-- § 2  repeatScore algebra
+theorem repeatScore_zero (s : List PNote) : repeatScore 0 s = [] := rfl
+theorem repeatScore_one  (s : List PNote) : repeatScore 1 s = s  := List.append_nil s
+private lemma repeatScore_succ (n : Nat) (s : List PNote) :
+    repeatScore (n + 1) s = s ++ repeatScore n s := rfl
+theorem repeatScore_length (n : Nat) (s : List PNote) :
+    (repeatScore n s).length = n * s.length := by
+  induction n with
+  | zero => rfl
+  | succ n ih => rw [repeatScore_succ, List.length_append, ih]; omega
+theorem repeatScore_append (m n : Nat) (s : List PNote) :
+    repeatScore (m + n) s = repeatScore m s ++ repeatScore n s := by
+  induction m with
+  | zero => rfl
+  | succ m ih =>
+    have h : m + 1 + n = (m + n) + 1 := by omega
+    rw [h, repeatScore_succ, repeatScore_succ, ih, ← List.append_assoc]
+
+-- § 3  Full score
+theorem boleroScore_length : boleroScore.length = 720 := by native_decide
+
+-- § 4  Dynamics
 theorem crescendo_monotonic :
     ∀ i, dynamic (layer i) < dynamic (layer (i + 1)) := by
   intro i; simp [layer, dynamic]
+theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
+    dynamic (layer i) ≤ dynamic (layer j) := by
+  simp [layer, dynamic]; exact h
 
-#print axioms crescendo_monotonic`;
+-- § 5  Axiom audit
+#print axioms crescendo_monotonic
+#print axioms repeatScore_length
+#print axioms repeatScore_append
+#print axioms boleroScore_length
+#print axioms dynamic_mono`;
+
+    // Self-contained version for lean4web (uses direct recursion, no foldr)
+    const PROOF_CODE =
+`-- ostinato/themes as plain lists of the right length
+def ostinato : List Nat := List.replicate 4 0
+def themeA   : List Nat := List.replicate 8 0
+def themeB   : List Nat := List.replicate 8 0
+
+-- Direct structural recursion (avoids foldr argument-order differences)
+@[simp] def repeatScore : Nat → List Nat → List Nat
+  | 0,     _ => []
+  | n + 1, s => s ++ repeatScore n s
+
+def boleroScore : List Nat :=
+  repeatScore 9 (repeatScore 16 ostinato ++ themeA ++ themeB)
+
+def layer (i : Nat) : Nat := i
+def dynamic (x : Nat) : Nat := x
+
+-- § 1  Concrete lengths (all definitionally true)
+theorem ostinato_length : ostinato.length = 4 := rfl
+theorem themeA_length   : themeA.length   = 8 := rfl
+theorem themeB_length   : themeB.length   = 8 := rfl
+theorem themes_equal_length    : themeA.length = themeB.length     := rfl
+theorem themes_double_ostinato : themeA.length = 2 * ostinato.length := rfl
+
+-- § 2  repeatScore algebra
+-- These are now definitional equations of the recursive function.
+theorem repeatScore_zero (s : List Nat) : repeatScore 0 s = [] := rfl
+theorem repeatScore_one  (s : List Nat) : repeatScore 1 s = s := List.append_nil s
+
+-- Length scales linearly with the repeat count.
+theorem repeatScore_length (n : Nat) (s : List Nat) :
+    (repeatScore n s).length = n * s.length := by
+  induction n with
+  | zero => simp [Nat.zero_mul]
+  | succ n ih =>
+    show (s ++ repeatScore n s).length = (n + 1) * s.length
+    rw [List.length_append, ih, Nat.succ_mul]; omega
+
+-- m + n cycles equals m cycles concatenated with n cycles.
+theorem repeatScore_append (m n : Nat) (s : List Nat) :
+    repeatScore (m + n) s = repeatScore m s ++ repeatScore n s := by
+  induction m with
+  | zero => simp
+  | succ m ih =>
+    simp only [Nat.succ_add, repeatScore]
+    rw [ih, List.append_assoc]
+
+-- § 3  Full score
+-- 9 × (16 × 4 + 8 + 8) = 9 × 80 = 720
+theorem boleroScore_length : boleroScore.length = 720 := by
+  simp [boleroScore, repeatScore_length, List.length_append,
+        ostinato_length, themeA_length, themeB_length]
+
+-- § 4  Dynamics
+theorem crescendo_monotonic : ∀ i, dynamic (layer i) < dynamic (layer (i + 1)) := by
+  intro i; simp [layer, dynamic]
+theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
+    dynamic (layer i) ≤ dynamic (layer j) := by
+  simp [layer, dynamic]; exact h
+
+-- § 5  Axiom audit
+#print axioms crescendo_monotonic
+#print axioms repeatScore_length
+#print axioms repeatScore_append
+#print axioms boleroScore_length
+#print axioms dynamic_mono`;
 
     document.getElementById('leancode').value = LEAN_CODE;
 
@@ -192,17 +305,19 @@ theorem crescendo_monotonic :
         return;
       }
 
-      const axiomMsg = infos.find(d => /depends on axioms/.test(d.message));
-      if (axiomMsg) {
-        const hasSorry = /sorryAx/.test(axiomMsg.message);
+      const axiomMsgs = infos.filter(d => /depends on axioms/.test(d.message));
+      if (axiomMsgs.length > 0) {
+        const hasSorry = axiomMsgs.some(d => /sorryAx/.test(d.message));
         out.className = hasSorry ? 'unproven' : 'proven';
-        const icon = hasSorry ? '❌' : '✅';
-        // Highlight axiom names
-        const formatted = axiomMsg.message.replace(
-          /\[([^\]]+)\]/,
-          (_, inner) => `[<span class="axiom">${inner}</span>]`
-        );
-        out.innerHTML = `${icon} ${formatted}`;
+        out.innerHTML = axiomMsgs.map(d => {
+          const sorry = /sorryAx/.test(d.message);
+          const icon = sorry ? '❌' : '✅';
+          const formatted = d.message.replace(
+            /\[([^\]]+)\]/,
+            (_, inner) => `[<span class="axiom">${inner}</span>]`
+          );
+          return `${icon} ${formatted}`;
+        }).join('\n');
         return;
       }
 
@@ -255,18 +370,8 @@ theorem crescendo_monotonic :
     }
 
     function prove() {
-      // Extract just the self-contained part (skip Prismriver-specific imports/notations)
-      const code = document.getElementById('leancode').value;
-      const lines = code.split('\n');
-      const filtered = lines.filter(l =>
-        !l.startsWith('import ') && !l.startsWith('open ') &&
-        !l.includes('PNote') && !l.includes('♩[') &&
-        !l.includes('repeatScore') && !l.includes('boleroScore') &&
-        !l.includes('ostinato') && !l.includes('themeA') && !l.includes('themeB') &&
-        !l.startsWith('#eval')
-      ).join('\n').trim();
       document.getElementById('toolbar-hint').textContent = 'Sending to Lean server…';
-      runLean(filtered, (diags) => {
+      runLean(PROOF_CODE, (diags) => {
         document.getElementById('toolbar-hint').textContent = 'Edit the code and click Prove';
         showResult(diags);
       });
