@@ -6,6 +6,7 @@
   <title>Prismriver Live • Lean + Music</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%8E%BC%3C/text%3E%3C/svg%3E">
   <script src="https://cdn.jsdelivr.net/npm/vexflow@5.0.0/build/cjs/vexflow.js"></script>
+  <script src="https://cdn.jsdelivr.net/combine/npm/tone@14.7.77/build/Tone.js,npm/@magenta/music@1.23.1/es6/core.js,npm/html-midi-player@1.5.0"></script>
   <style>
     * { box-sizing: border-box; }
     body { margin:0; display:flex; flex-direction:column; height:100vh; background:#1e1e1e; color:#ccc; font-family:system-ui; }
@@ -110,6 +111,27 @@
       border-radius:6px; padding:3px 8px; font-size:12px; cursor:pointer;
     }
     #score-nav button:disabled { opacity:0.5; cursor:default; }
+    #midi-panel {
+      display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+      margin:0 0 10px 0; padding:8px 10px;
+      border:1px solid #dbe5ff; border-radius:8px; background:#f8fbff;
+      font-size:12px; color:#2e456f;
+    }
+    #midi-panel button {
+      border:1px solid #bcd0ff; background:#fff; color:#1f2a44;
+      border-radius:6px; padding:3px 8px; font-size:12px; cursor:pointer;
+    }
+    #midi-panel button:disabled { opacity:0.55; cursor:default; }
+    #midi-panel label { display:flex; align-items:center; gap:6px; }
+    #midi-panel input[type="range"] { width:120px; }
+    #midi-status { min-width:120px; font-weight:600; }
+    #midi-export-status { min-width:150px; font-weight:600; color:#3f5787; }
+    #midi-component {
+      margin:0 0 10px 0; padding:8px 10px;
+      border:1px solid #dbe5ff; border-radius:8px; background:#f8fbff;
+    }
+    #midi-component[hidden] { display:none !important; }
+    #midi-component midi-player { width:100%; }
     #score { flex:1; }
     a.lean4web { color:#89b4fa; font-size:12px; text-decoration:none; margin-left:auto; }
     a.lean4web:hover { text-decoration:underline; }
@@ -154,6 +176,22 @@
           <button id="score-prev" type="button">Prev</button>
           <span id="score-window">Notes 1-0 of 0</span>
           <button id="score-next" type="button">Next</button>
+        </div>
+        <div id="midi-panel">
+          <button id="midi-play" type="button">Play</button>
+          <button id="midi-stop" type="button" disabled>Stop</button>
+          <button id="midi-build" type="button">Load MIDI Component</button>
+          <button id="midi-download" type="button">Download .mid</button>
+          <label>
+            Tempo
+            <input id="midi-tempo" type="range" min="40" max="200" step="1" value="120" />
+            <span id="midi-tempo-value">120 BPM</span>
+          </label>
+          <span id="midi-status">Ready</span>
+          <span id="midi-export-status">MIDI not generated</span>
+        </div>
+        <div id="midi-component" hidden>
+          <midi-player id="midi-component-player"></midi-player>
         </div>
         <div id="score"></div>
       </div>
@@ -359,6 +397,7 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
       } else {
         scoreView.hidden = true;
         tutorialView.hidden = false;
+        if (midiPlaying) stopMidiPlayback('Paused');
       }
     }
 
@@ -488,10 +527,254 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
     let currentPreviewOffset = 0;
     let currentTokenCount = 0;
     let currentMaxVisible = 64;
+    let midiAudioCtx = null;
+    let midiTimer = null;
+    let midiOsc = null;
+    let midiGain = null;
+    let midiPlaying = false;
+    let midiIndex = 0;
+    let midiTokens = [];
+    let midiObjectUrl = null;
+
+    function setMidiStatus(text) {
+      const el = document.getElementById('midi-status');
+      if (el) el.textContent = text;
+    }
+
+    function setMidiExportStatus(text) {
+      const el = document.getElementById('midi-export-status');
+      if (el) el.textContent = text;
+    }
+
+    function noteToFrequency(token) {
+      const m = token.toLowerCase().match(/^([a-g])([#b]?)(\d)$/);
+      if (!m) return null;
+      const semis = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+      const pitch = m[1];
+      const accidental = m[2];
+      const octave = Number(m[3]);
+      let semitone = semis[pitch];
+      if (accidental === '#') semitone += 1;
+      if (accidental === 'b') semitone -= 1;
+      const midi = (octave + 1) * 12 + semitone;
+      return 440 * Math.pow(2, (midi - 69) / 12);
+    }
+
+    function selectedTokens() {
+      if (!currentConstant || !currentDefinitions.has(currentConstant)) return [];
+      return evaluatePNoteExpr(currentDefinitions.get(currentConstant), currentDefinitions, new Map(), new Set());
+    }
+
+    function noteToMidiNumber(token) {
+      const m = token.toLowerCase().match(/^([a-g])([#b]?)(\d)$/);
+      if (!m) return null;
+      const semis = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+      const pitch = m[1];
+      const accidental = m[2];
+      const octave = Number(m[3]);
+      let semitone = semis[pitch];
+      if (accidental === '#') semitone += 1;
+      if (accidental === 'b') semitone -= 1;
+      const midi = (octave + 1) * 12 + semitone;
+      if (midi < 0 || midi > 127) return null;
+      return midi;
+    }
+
+    function pushVarLen(out, value) {
+      let v = Math.max(0, value | 0);
+      const stack = [v & 0x7f];
+      v >>= 7;
+      while (v > 0) {
+        stack.push((v & 0x7f) | 0x80);
+        v >>= 7;
+      }
+      for (let i = stack.length - 1; i >= 0; i--) out.push(stack[i]);
+    }
+
+    function pushU32(out, value) {
+      out.push((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+    }
+
+    function asciiBytes(text) {
+      return Array.from(text).map(ch => ch.charCodeAt(0));
+    }
+
+    function buildMidiBytes(tokens, bpm) {
+      const ticksPerQuarter = 480;
+      const tempo = Math.max(30, Math.min(300, Math.round(bpm)));
+      const mpqn = Math.max(1, Math.min(0xffffff, Math.round(60000000 / tempo)));
+      const track = [];
+
+      const pushEvent = (delta, bytes) => {
+        pushVarLen(track, delta);
+        track.push(...bytes);
+      };
+
+      pushEvent(0, [0xff, 0x51, 0x03, (mpqn >> 16) & 0xff, (mpqn >> 8) & 0xff, mpqn & 0xff]);
+      pushEvent(0, [0xc0, 0x00]);
+
+      let pendingDelta = 0;
+      for (const token of tokens) {
+        const note = noteToMidiNumber(token);
+        if (note === null) {
+          pendingDelta += ticksPerQuarter;
+          continue;
+        }
+
+        pushEvent(pendingDelta, [0x90, note, 96]);
+        pushEvent(ticksPerQuarter, [0x80, note, 0]);
+        pendingDelta = 0;
+      }
+
+      pushEvent(pendingDelta, [0xff, 0x2f, 0x00]);
+
+      const out = [];
+      out.push(...asciiBytes('MThd'));
+      pushU32(out, 6);
+      out.push(0x00, 0x00);
+      out.push(0x00, 0x01);
+      out.push((ticksPerQuarter >> 8) & 0xff, ticksPerQuarter & 0xff);
+
+      out.push(...asciiBytes('MTrk'));
+      pushU32(out, track.length);
+      out.push(...track);
+
+      return new Uint8Array(out);
+    }
+
+    function resetMidiComponent(status = 'MIDI not generated') {
+      const container = document.getElementById('midi-component');
+      const player = document.getElementById('midi-component-player');
+      if (midiObjectUrl) {
+        URL.revokeObjectURL(midiObjectUrl);
+        midiObjectUrl = null;
+      }
+      if (player) player.removeAttribute('src');
+      if (container) container.hidden = true;
+      setMidiExportStatus(status);
+    }
+
+    function buildMidiForCurrentSelection() {
+      const tokens = selectedTokens();
+      if (tokens.length === 0) {
+        resetMidiComponent('No notes to export');
+        return null;
+      }
+      const tempo = Number(document.getElementById('midi-tempo')?.value || 120);
+      const bytes = buildMidiBytes(tokens, tempo);
+      if (midiObjectUrl) URL.revokeObjectURL(midiObjectUrl);
+      midiObjectUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/midi' }));
+      const player = document.getElementById('midi-component-player');
+      const container = document.getElementById('midi-component');
+      if (player) player.setAttribute('src', midiObjectUrl);
+      if (container) container.hidden = false;
+      setMidiExportStatus(`MIDI ready (${tokens.length} notes @ ${tempo} BPM)`);
+      return { url: midiObjectUrl, noteCount: tokens.length, tempo };
+    }
+
+    function downloadCurrentMidi() {
+      const built = buildMidiForCurrentSelection();
+      if (!built) return;
+      const a = document.createElement('a');
+      const name = (currentConstant || 'score').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
+      a.href = built.url;
+      a.download = `${name || 'score'}.mid`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setMidiExportStatus(`Downloaded ${name || 'score'}.mid`);
+    }
+
+    function stopMidiPlayback(reason = 'Stopped') {
+      midiPlaying = false;
+      if (midiTimer) {
+        clearTimeout(midiTimer);
+        midiTimer = null;
+      }
+      if (midiOsc) {
+        try { midiOsc.stop(); } catch {}
+        try { midiOsc.disconnect(); } catch {}
+      }
+      if (midiGain) {
+        try { midiGain.disconnect(); } catch {}
+      }
+      midiOsc = null;
+      midiGain = null;
+      const playBtn = document.getElementById('midi-play');
+      const stopBtn = document.getElementById('midi-stop');
+      if (playBtn) playBtn.disabled = false;
+      if (stopBtn) stopBtn.disabled = true;
+      setMidiStatus(reason);
+    }
+
+    function playMidiStep() {
+      if (!midiPlaying || !midiAudioCtx) return;
+      if (midiIndex >= midiTokens.length) {
+        stopMidiPlayback('Done');
+        return;
+      }
+
+      const token = midiTokens[midiIndex++];
+      const freq = noteToFrequency(token);
+      const tempo = Number(document.getElementById('midi-tempo')?.value || 120);
+      const beatSec = 60 / Math.max(40, tempo);
+
+      if (freq) {
+        const t0 = midiAudioCtx.currentTime;
+        const attack = 0.01;
+        const release = Math.max(0.02, beatSec * 0.25);
+        midiGain = midiAudioCtx.createGain();
+        midiOsc = midiAudioCtx.createOscillator();
+        midiOsc.type = 'triangle';
+        midiOsc.frequency.setValueAtTime(freq, t0);
+        midiGain.gain.setValueAtTime(0.0001, t0);
+        midiGain.gain.exponentialRampToValueAtTime(0.16, t0 + attack);
+        midiGain.gain.exponentialRampToValueAtTime(0.0001, t0 + beatSec - release);
+        midiOsc.connect(midiGain);
+        midiGain.connect(midiAudioCtx.destination);
+        midiOsc.start(t0);
+        midiOsc.stop(t0 + beatSec);
+      }
+
+      setMidiStatus(`Playing ${midiIndex}/${midiTokens.length}`);
+      midiTimer = setTimeout(playMidiStep, beatSec * 1000);
+    }
+
+    async function startMidiPlayback() {
+      const tokens = selectedTokens();
+      if (tokens.length === 0) {
+        setMidiStatus('No notes to play');
+        return;
+      }
+
+      stopMidiPlayback('Ready');
+      midiTokens = tokens;
+      midiIndex = 0;
+
+      if (!midiAudioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) {
+          setMidiStatus('Web Audio unavailable');
+          return;
+        }
+        midiAudioCtx = new Ctx();
+      }
+      if (midiAudioCtx.state === 'suspended') {
+        await midiAudioCtx.resume();
+      }
+
+      midiPlaying = true;
+      document.getElementById('midi-play').disabled = true;
+      document.getElementById('midi-stop').disabled = false;
+      setMidiStatus(`Playing 0/${midiTokens.length}`);
+      playMidiStep();
+    }
 
     function selectConstant(name) {
       currentConstant = name;
       currentPreviewOffset = 0;
+      stopMidiPlayback('Ready');
+      resetMidiComponent('MIDI not generated');
       document.querySelectorAll('#constants-list button').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.constant === name);
       });
@@ -522,6 +805,8 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
         li.textContent = 'No constants of type List PNote found.';
         ul.appendChild(li);
         currentConstant = null;
+        stopMidiPlayback('No notes to play');
+        resetMidiComponent('No notes to export');
         renderBolero(null);
         return;
       }
@@ -780,6 +1065,24 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
     (function() {
       document.querySelectorAll('#right-tabs button').forEach(btn => {
         btn.addEventListener('click', () => setRightTab(btn.dataset.tab));
+      });
+
+      document.getElementById('midi-play').addEventListener('click', () => {
+        startMidiPlayback();
+      });
+      document.getElementById('midi-stop').addEventListener('click', () => {
+        stopMidiPlayback('Stopped');
+      });
+      document.getElementById('midi-build').addEventListener('click', () => {
+        const built = buildMidiForCurrentSelection();
+        if (built) setMidiExportStatus(`Loaded in player (${built.noteCount} notes)`);
+      });
+      document.getElementById('midi-download').addEventListener('click', () => {
+        downloadCurrentMidi();
+      });
+      document.getElementById('midi-tempo').addEventListener('input', (e) => {
+        document.getElementById('midi-tempo-value').textContent = `${e.target.value} BPM`;
+        if (midiObjectUrl) setMidiExportStatus('Tempo changed. Rebuild MIDI.');
       });
 
       document.getElementById('score-prev').addEventListener('click', () => {
