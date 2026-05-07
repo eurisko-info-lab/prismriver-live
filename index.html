@@ -43,10 +43,28 @@
     #proofbox .unproven { color:#f38ba8; }
     #proofbox .pending  { color:#89b4fa; }
     #proofbox .axiom   { color:#cba6f7; font-style:italic; }
-    .tab { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
-    .tab button { padding:6px 14px; background:#ddd; color:#111; border:0; font-size:13px; cursor:pointer; border-radius:3px; }
-    .tab button:hover { background:#bbb; }
-    .tab button.active { background:#4a90e2; color:white; }
+    #constants-panel {
+      background:#f7f9ff; border:1px solid #dbe5ff; border-radius:8px;
+      padding:10px 12px; margin:0 0 12px 0;
+    }
+    #constants-panel .title {
+      font-size:12px; color:#2d4f8f; text-transform:uppercase;
+      letter-spacing:.05em; margin-bottom:6px; font-weight:700;
+    }
+    #constants-list {
+      margin:0; padding:0; display:flex; flex-wrap:wrap; gap:8px;
+    }
+    #constants-list li { list-style:none; }
+    #constants-list button {
+      border:1px solid #bcd0ff; background:#fff; color:#1f2a44;
+      border-radius:16px; padding:5px 10px; font-size:12px;
+      cursor:pointer;
+    }
+    #constants-list button:hover { background:#edf3ff; }
+    #constants-list button.active {
+      background:#4a90e2; border-color:#4a90e2; color:#fff;
+    }
+    #constants-list li.empty { color:#5b6782; }
     #score { flex:1; }
     a.lean4web { color:#89b4fa; font-size:12px; text-decoration:none; margin-left:auto; }
     a.lean4web:hover { text-decoration:underline; }
@@ -71,10 +89,9 @@
     <div id="divider"></div>
     <div id="right">
       <h2 style="margin:0 0 10px 0; font-size:16px;">Score (VexFlow 5)</h2>
-      <div class="tab">
-        <button class="active" onclick="loadExample(0)">Boléro Ostinato</button>
-        <button onclick="loadExample(1)">Theme A + B</button>
-        <button onclick="loadExample(2)">Full Form</button>
+      <div id="constants-panel">
+        <div class="title">List PNote Constants</div>
+        <ul id="constants-list"></ul>
       </div>
       <div id="score"></div>
     </div>
@@ -214,6 +231,162 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
 
     document.getElementById('leancode').value = LEAN_CODE;
 
+    function extractListPNoteConstants(code) {
+      const re = /^\s*def\s+([A-Za-z_][\w']*)\s*:\s*List\s+PNote\s*:=/gm;
+      const names = [];
+      let match;
+      while ((match = re.exec(code)) !== null) {
+        names.push(match[1]);
+      }
+      return [...new Set(names)];
+    }
+
+    function extractListPNoteDefinitions(code) {
+      const lines = code.split('\n');
+      const defs = new Map();
+      for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(/^\s*def\s+([A-Za-z_][\w']*)\s*:\s*List\s+PNote\s*:=\s*(.*)$/);
+        if (!m) continue;
+        const name = m[1];
+        let body = m[2].trim();
+        if (!body) {
+          const next = lines[i + 1] || '';
+          body = next.trim();
+        }
+        defs.set(name, body);
+      }
+      return defs;
+    }
+
+    function stripOuterParens(expr) {
+      let s = expr.trim();
+      while (s.startsWith('(') && s.endsWith(')')) {
+        let depth = 0;
+        let balanced = true;
+        for (let i = 0; i < s.length; i++) {
+          const ch = s[i];
+          if (ch === '(') depth++;
+          if (ch === ')') depth--;
+          if (depth === 0 && i < s.length - 1) { balanced = false; break; }
+        }
+        if (!balanced) break;
+        s = s.slice(1, -1).trim();
+      }
+      return s;
+    }
+
+    function splitTopLevelAppend(expr) {
+      const parts = [];
+      let depth = 0;
+      let start = 0;
+      for (let i = 0; i < expr.length - 1; i++) {
+        const ch = expr[i];
+        if (ch === '(') depth++;
+        else if (ch === ')') depth--;
+        else if (depth === 0 && expr[i] === '+' && expr[i + 1] === '+') {
+          parts.push(expr.slice(start, i).trim());
+          start = i + 2;
+          i++;
+        }
+      }
+      parts.push(expr.slice(start).trim());
+      return parts.filter(Boolean);
+    }
+
+    function parsePNoteLiteral(expr) {
+      const m = expr.match(/^♩\[([^\]]*)\]$/);
+      if (!m) return null;
+      return m[1].trim().split(/\s+/).filter(Boolean);
+    }
+
+    function evaluatePNoteExpr(expr, defs, memo, stack) {
+      const s = stripOuterParens(expr);
+
+      const literal = parsePNoteLiteral(s);
+      if (literal) return literal;
+
+      if (/^[A-Za-z_][\w']*$/.test(s) && defs.has(s)) {
+        if (memo.has(s)) return memo.get(s);
+        if (stack.has(s)) return [];
+        stack.add(s);
+        const value = evaluatePNoteExpr(defs.get(s), defs, memo, stack);
+        stack.delete(s);
+        memo.set(s, value);
+        return value;
+      }
+
+      const appendParts = splitTopLevelAppend(s);
+      if (appendParts.length > 1) {
+        return appendParts.flatMap(part => evaluatePNoteExpr(part, defs, memo, stack));
+      }
+
+      const repeatMatch = s.match(/^repeatScore\s+(\d+)\s+(.+)$/);
+      if (repeatMatch) {
+        const n = Number(repeatMatch[1]);
+        const seq = evaluatePNoteExpr(repeatMatch[2], defs, memo, stack);
+        const out = [];
+        for (let i = 0; i < n; i++) out.push(...seq);
+        return out;
+      }
+
+      return [];
+    }
+
+    function noteToVex(token) {
+      const m = token.toLowerCase().match(/^([a-g])([#b]?)(\d)$/);
+      if (!m) return null;
+      const [, pitch, accidental, octave] = m;
+      return `${pitch}${accidental}${octave}`;
+    }
+
+    let currentConstant = null;
+    let currentDefinitions = new Map();
+
+    function selectConstant(name) {
+      currentConstant = name;
+      document.querySelectorAll('#constants-list button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.constant === name);
+      });
+      renderBolero(name);
+    }
+
+    function renderListPNoteConstants() {
+      const code = document.getElementById('leancode').value;
+      const names = extractListPNoteConstants(code);
+      currentDefinitions = extractListPNoteDefinitions(code);
+      const ul = document.getElementById('constants-list');
+      ul.innerHTML = '';
+      if (names.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'No constants of type List PNote found.';
+        ul.appendChild(li);
+        currentConstant = null;
+        renderBolero(null);
+        return;
+      }
+
+      let nextConstant = currentConstant;
+      if (!nextConstant || !names.includes(nextConstant)) {
+        nextConstant = names[0];
+      }
+
+      names.forEach(name => {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = name;
+        btn.dataset.constant = name;
+        btn.addEventListener('click', () => selectConstant(name));
+        li.appendChild(btn);
+        ul.appendChild(li);
+      });
+
+      selectConstant(nextConstant);
+    }
+
+    document.getElementById('leancode').addEventListener('input', renderListPNoteConstants);
+
     // ── Lean proof via lean4web WebSocket ──────────────────────────────────
     const FILE_URI = 'file:///MathlibDemo.lean';
     let msgId = 1;
@@ -333,7 +506,7 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
     }
 
     // ── VexFlow score ──────────────────────────────────────────────────────
-    function renderBolero(mode = 0) {
+    function renderBolero(constantName = null) {
       const div = document.getElementById("score");
       div.innerHTML = "";
       const VF = VexFlow;
@@ -341,33 +514,45 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
       const vf = new VF.Factory({ renderer: { elementId: "score", width: w, height: 280 } });
       const score = vf.EasyScore();
       const system = vf.System();
-      const noteCount = mode >= 1 ? 8 : 4;
+
+      let tokens = [];
+      if (constantName && currentDefinitions.has(constantName)) {
+        tokens = evaluatePNoteExpr(currentDefinitions.get(constantName), currentDefinitions, new Map(), new Set());
+      }
+
+      if (tokens.length === 0) {
+        tokens = ["c4", "d4", "e4", "f4"];
+      }
+
+      const maxVisible = 16;
+      const visibleTokens = tokens.slice(0, maxVisible);
+      const vexNotes = visibleTokens.map(noteToVex).filter(Boolean);
+      const rendered = vexNotes.length > 0 ? vexNotes : ["c4", "d4", "e4", "f4"];
+
       const beatValue = 4;
-      const ostinatoNotes = score.notes(
-        Array.from({ length: noteCount }, () => "c4/4").join(", "), { stem: "up" });
-      const v1 = new VF.Voice({ numBeats: noteCount, beatValue });
-      v1.addTickables(ostinatoNotes);
-      const melodyStr = mode >= 1
-        ? "e4/4, f4/4, g4/4, a4/4, g4/4, f4/4, e4/4, d4/4"
-        : "e4/4, f4/4, g4/4, a4/4";
-      const v2 = new VF.Voice({ numBeats: noteCount, beatValue });
-      v2.addTickables(score.notes(melodyStr, { stem: "down" }));
-      system.addStave({ voices: [v1, v2] }).addClef("treble").addTimeSignature(`${noteCount}/${beatValue}`);
+      const v1 = new VF.Voice({ numBeats: rendered.length, beatValue });
+      v1.setStrict(false);
+      v1.addTickables(score.notes(rendered.map(n => `${n}/4`).join(", "), { stem: "up" }));
+      system.addStave({ voices: [v1] }).addClef("treble").addTimeSignature(`${rendered.length}/${beatValue}`);
       vf.draw();
+
       const svg = div.querySelector("svg");
       if (svg) {
         const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
         t.setAttribute("x","10"); t.setAttribute("y","28");
         t.setAttribute("fill","#111"); t.setAttribute("font-size","15");
-        t.textContent = "Ravel – Boléro (demo)";
+        const title = constantName ? `${constantName} (${tokens.length} notes)` : "Ravel – Boléro (demo)";
+        t.textContent = title;
         svg.appendChild(t);
-      }
-    }
 
-    function loadExample(n) {
-      currentMode = n;
-      document.querySelectorAll('.tab button').forEach((b,i) => b.classList.toggle('active', i===n));
-      renderBolero(n);
+        if (tokens.length > maxVisible) {
+          const t2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          t2.setAttribute("x", "10"); t2.setAttribute("y", "46");
+          t2.setAttribute("fill", "#555"); t2.setAttribute("font-size", "12");
+          t2.textContent = `Showing first ${maxVisible} notes of ${tokens.length}`;
+          svg.appendChild(t2);
+        }
+      }
     }
 
     function prove() {
@@ -396,7 +581,7 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
         const delta = startX - e.clientX;
         right.style.width = Math.max(200, startW + delta) + 'px';
         right.style.flex = 'none';
-        renderBolero(currentMode);
+        renderBolero(currentConstant);
       });
       document.addEventListener('mouseup', () => {
         if (!dragging) return;
@@ -407,10 +592,8 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
       });
     })();
 
-    let currentMode = 0;
-
     window.onload = () => {
-      renderBolero(0);
+      renderListPNoteConstants();
       prove();
     };
   </script>
