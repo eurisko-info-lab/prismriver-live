@@ -71,6 +71,35 @@
       background:#4a90e2; border-color:#4a90e2; color:#fff;
     }
     #constants-list li.empty { color:#5b6782; }
+    #right-tabs {
+      display:flex; gap:8px; margin:0 0 12px 0;
+    }
+    #right-tabs button {
+      border:1px solid #c7d6ff; background:#fff; color:#27406e;
+      border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600;
+      cursor:pointer;
+    }
+    #right-tabs button.active {
+      background:#4a90e2; border-color:#4a90e2; color:#fff;
+    }
+    #score-view, #tutorial-view { min-height:0; display:flex; flex-direction:column; }
+    #tutorial-content {
+      background:#f9fbff; border:1px solid #dbe5ff; border-radius:10px;
+      padding:14px; overflow:auto; font-size:13px; line-height:1.55; color:#223455;
+    }
+    #tutorial-content h2, #tutorial-content h3, #tutorial-content h4 { color:#1f3f77; margin:14px 0 8px 0; }
+    #tutorial-content h2 { font-size:16px; }
+    #tutorial-content h3 { font-size:14px; }
+    #tutorial-content p { margin:8px 0; }
+    #tutorial-content ul, #tutorial-content ol { margin:8px 0 8px 18px; padding:0; }
+    #tutorial-content pre {
+      background:#1e2536; color:#d4ddff; border-radius:8px;
+      padding:10px; overflow:auto;
+    }
+    #tutorial-content code {
+      background:#e8efff; color:#1f3760; border-radius:4px; padding:1px 4px;
+      font-family:ui-monospace,monospace;
+    }
     #score-nav {
       display:flex; align-items:center; gap:8px; margin:0 0 10px 0;
       font-size:12px; color:#304366;
@@ -104,23 +133,36 @@
     </div>
     <div id="divider"></div>
     <div id="right">
-      <h2 style="margin:0 0 10px 0; font-size:16px;">Score (VexFlow 5)</h2>
-      <div id="constants-panel">
-        <div class="title">List PNote Constants</div>
-        <ul id="constants-list"></ul>
+      <div id="right-tabs">
+        <button id="tab-tutorial" type="button" data-tab="tutorial">Tutorial</button>
+        <button id="tab-score" type="button" data-tab="score">Score</button>
       </div>
-      <div id="score-nav">
-        <button id="score-prev" type="button">Prev</button>
-        <span id="score-window">Notes 1-0 of 0</span>
-        <button id="score-next" type="button">Next</button>
+
+      <div id="tutorial-view">
+        <h2 style="margin:0 0 10px 0; font-size:16px;">Bolero Tutorial</h2>
+        <div id="tutorial-content">Loading tutorial…</div>
       </div>
-      <div id="score"></div>
+
+      <div id="score-view" hidden>
+        <h2 style="margin:0 0 10px 0; font-size:16px;">Score (VexFlow 5)</h2>
+        <div id="constants-panel">
+          <div class="title">List PNote Constants</div>
+          <ul id="constants-list"></ul>
+        </div>
+        <div id="score-nav">
+          <button id="score-prev" type="button">Prev</button>
+          <span id="score-window">Notes 1-0 of 0</span>
+          <button id="score-next" type="button">Next</button>
+        </div>
+        <div id="score"></div>
+      </div>
     </div>
   </div>
 
   <script>
     // ── Lean code source ───────────────────────────────────────────────────
     const LEAN_CODE_PATH = 'examples/bolero.lean';
+    const README_PATH = 'README.md';
 
     // Self-contained version for lean4web (uses direct recursion, no foldr)
     const PROOF_CODE =
@@ -202,6 +244,120 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
       } catch (err) {
         editor.value = '-- Could not load examples/bolero.lean\n';
         hint.textContent = 'Failed to load bolero.lean';
+      }
+    }
+
+    function escapeHtml(s) {
+      return s
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    function formatInline(text) {
+      const parts = text.split(/(`[^`]+`)/g);
+      return parts.map(p => {
+        if (p.startsWith('`') && p.endsWith('`')) {
+          return `<code>${escapeHtml(p.slice(1, -1))}</code>`;
+        }
+        return escapeHtml(p);
+      }).join('');
+    }
+
+    function markdownToHtml(md) {
+      const lines = md.split('\n');
+      const out = [];
+      let inCode = false;
+      let inUl = false;
+      let inOl = false;
+
+      const closeLists = () => {
+        if (inUl) { out.push('</ul>'); inUl = false; }
+        if (inOl) { out.push('</ol>'); inOl = false; }
+      };
+
+      for (const line of lines) {
+        if (line.trim().startsWith('```')) {
+          closeLists();
+          if (!inCode) { out.push('<pre><code>'); inCode = true; }
+          else { out.push('</code></pre>'); inCode = false; }
+          continue;
+        }
+
+        if (inCode) {
+          out.push(`${escapeHtml(line)}\n`);
+          continue;
+        }
+
+        const h = line.match(/^(#{1,4})\s+(.*)$/);
+        if (h) {
+          closeLists();
+          const level = h[1].length;
+          out.push(`<h${level}>${formatInline(h[2])}</h${level}>`);
+          continue;
+        }
+
+        const ul = line.match(/^\s*[-*]\s+(.*)$/);
+        if (ul) {
+          if (!inUl) { closeLists(); out.push('<ul>'); inUl = true; }
+          out.push(`<li>${formatInline(ul[1])}</li>`);
+          continue;
+        }
+
+        const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+        if (ol) {
+          if (!inOl) { closeLists(); out.push('<ol>'); inOl = true; }
+          out.push(`<li>${formatInline(ol[1])}</li>`);
+          continue;
+        }
+
+        if (!line.trim()) {
+          closeLists();
+          continue;
+        }
+
+        closeLists();
+        out.push(`<p>${formatInline(line)}</p>`);
+      }
+
+      closeLists();
+      if (inCode) out.push('</code></pre>');
+      return out.join('\n');
+    }
+
+    function extractTutorialSection(md) {
+      const marker = '## Tutorial:';
+      const idx = md.indexOf(marker);
+      if (idx === -1) return md;
+      return md.slice(idx);
+    }
+
+    async function loadTutorialFromFile() {
+      const container = document.getElementById('tutorial-content');
+      try {
+        const res = await fetch(README_PATH, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const md = await res.text();
+        container.innerHTML = markdownToHtml(extractTutorialSection(md));
+      } catch (err) {
+        container.textContent = 'Could not load tutorial from README.md';
+      }
+    }
+
+    function setRightTab(tab) {
+      const scoreView = document.getElementById('score-view');
+      const tutorialView = document.getElementById('tutorial-view');
+      document.querySelectorAll('#right-tabs button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+      });
+
+      if (tab === 'score') {
+        scoreView.hidden = false;
+        tutorialView.hidden = true;
+        renderBolero(currentConstant);
+      } else {
+        scoreView.hidden = true;
+        tutorialView.hidden = false;
       }
     }
 
@@ -621,6 +777,10 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
 
     // ── Resizable divider ───────────────────────────────────────────────────────
     (function() {
+      document.querySelectorAll('#right-tabs button').forEach(btn => {
+        btn.addEventListener('click', () => setRightTab(btn.dataset.tab));
+      });
+
       document.getElementById('score-prev').addEventListener('click', () => {
         currentPreviewOffset = Math.max(0, currentPreviewOffset - currentMaxVisible);
         renderBolero(currentConstant);
@@ -697,8 +857,9 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
     })();
 
     window.onload = async () => {
-      await loadLeanCodeFromFile();
+      await Promise.all([loadLeanCodeFromFile(), loadTutorialFromFile()]);
       renderListPNoteConstants();
+      setRightTab('tutorial');
       prove();
     };
   </script>
