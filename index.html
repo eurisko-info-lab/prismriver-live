@@ -255,9 +255,10 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
           initialized = true;
         }
 
-        // Diagnostics from Lean
+        // Diagnostics from Lean — each event replaces the previous set (LSP semantics)
         if (msg.method === 'textDocument/publishDiagnostics' && initialized) {
           const diags = msg.params?.diagnostics ?? [];
+          diagnostics.length = 0;
           diags.forEach(d => diagnostics.push(d));
         }
 
