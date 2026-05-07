@@ -530,7 +530,8 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
         voice.setStrict(false);
         voice.addTickables(score.notes(chunk.map(n => `${n}/4`).join(", "), { stem: "up" }));
         const stave = system.addStave({ voices: [voice] });
-        if (i === 0) stave.addClef("treble");
+        stave.addClef("treble");
+        if (i === 0) stave.addTimeSignature(`${chunk.length}/4`);
       }
 
       vf.draw();
