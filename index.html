@@ -34,9 +34,15 @@
     }
     #toolbar button:hover { background:#357abd; }
     #toolbar span { color:#666; font-size:12px; font-family:ui-monospace,monospace; }
+    #proof-divider {
+      height:6px; flex-shrink:0; background:#4a90e2; cursor:row-resize;
+      transition: background 0.15s;
+    }
+    #proof-divider:hover, #proof-divider.dragging { background:#74b3f5; }
     #proofbox {
       flex-shrink:0; padding:14px 20px; background:#252530; border-top:2px solid #4a90e2;
       font-family:ui-monospace,monospace; font-size:13px; line-height:1.7; min-height:80px;
+      height:150px; overflow:auto;
     }
     #proofbox .label { color:#888; font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px; }
     #proofbox .proven  { color:#a6e3a1; }
@@ -90,6 +96,7 @@
         <span id="toolbar-hint">Edit the code and click Prove</span>
       </div>
       <textarea id="leancode" spellcheck="false"></textarea>
+      <div id="proof-divider"></div>
       <div id="proofbox">
         <div class="label">Lean 4 proof output</div>
         <div id="proofout" class="pending">⟳ Connecting to Lean server…</div>
@@ -621,6 +628,45 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
       document.getElementById('score-next').addEventListener('click', () => {
         currentPreviewOffset = currentPreviewOffset + currentMaxVisible;
         renderBolero(currentConstant);
+      });
+
+      const proofDivider = document.getElementById('proof-divider');
+      const proofBox = document.getElementById('proofbox');
+      const left = document.getElementById('left');
+      const toolbar = document.getElementById('toolbar');
+      let proofDragging = false;
+      let proofStartY = 0;
+      let proofStartH = 0;
+
+      proofDivider.addEventListener('mousedown', e => {
+        proofDragging = true;
+        proofStartY = e.clientY;
+        proofStartH = proofBox.getBoundingClientRect().height;
+        proofDivider.classList.add('dragging');
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+      });
+
+      document.addEventListener('mousemove', e => {
+        if (!proofDragging) return;
+        const delta = proofStartY - e.clientY;
+        const leftH = left.getBoundingClientRect().height;
+        const toolbarH = toolbar.getBoundingClientRect().height;
+        const dividerH = proofDivider.getBoundingClientRect().height;
+        const minProofH = 80;
+        const minEditorH = 120;
+        const maxProofH = Math.max(minProofH, leftH - toolbarH - dividerH - minEditorH);
+        const nextH = Math.max(minProofH, Math.min(maxProofH, proofStartH + delta));
+        proofBox.style.height = `${nextH}px`;
+        proofBox.style.flex = 'none';
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!proofDragging) return;
+        proofDragging = false;
+        proofDivider.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
       });
 
       const divider = document.getElementById('divider');
