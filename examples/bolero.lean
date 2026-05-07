@@ -5,14 +5,14 @@ open Prismriver.Classical
 abbrev PNote := Prismriver.Classical.Note
 
 -- ╔════════════════════════════════════════════════════════════════════════════╗
--- ║  Ravel's Boléro – Formal Structure & Proof Harness                        ║
+-- ║  Ravel's Boléro – Formal Structure & Proof Harness                         ║
 -- │                                                                            │
--- │  Maurice Ravel's Boléro (1928) is a one-movement orchestral work famous   │
--- │  for its obsessive repetition of a 16-bar melody over a persistent        │
--- │  2/4 ostinato drum pattern. This file axiomatizes the piece's core        │
--- │  elements: the immovable ostinato (bass drum), the two alternating        │
--- │  themes (soprano & alto), and the 9-fold repetition that builds from      │
--- │  a whisper to a climax. We then prove structural properties:              │
+-- │  Maurice Ravel's Boléro (1928) is a one-movement orchestral work famous    │
+-- │  for its obsessive repetition of a 16-bar melody over a persistent         │
+-- │  2/4 ostinato drum pattern. This file axiomatizes the piece's core         │
+-- │  elements: the immovable ostinato (bass drum), the two alternating         │
+-- │  themes (soprano & alto), and the 9-fold repetition that builds from       │
+-- │  a whisper to a climax. We then prove structural properties:               │
 -- │    • Linear length scaling under repetition                                │
 -- │    • Compositionality of concatenated cycles                               │
 -- │    • Invariant: the full score spans exactly 720 quarter-note units        │
