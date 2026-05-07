@@ -98,68 +98,8 @@
   </div>
 
   <script>
-    // ── Lean code ──────────────────────────────────────────────────────────
-    const LEAN_CODE =
-`import Prismriver
-open Prismriver.Classical
-
-abbrev PNote := Prismriver.Classical.Note
-
-def ostinato : List PNote := ♩[c4 c4 c4 c4]
-def themeA   : List PNote := ♩[e4 f4 g4 a4 g4 f4 e4 d4]
-def themeB   : List PNote := ♩[c4 d4 e4 f4 e4 d4 c4 b4]
-
-def repeatScore (n : Nat) (s : List PNote) : List PNote :=
-  (List.replicate n s).foldr (· ++ ·) []
-
-def boleroScore : List PNote :=
-  repeatScore 9 (repeatScore 16 ostinato ++ themeA ++ themeB)
-
-def layer (i : Nat) : Nat := i
-def dynamic (x : Nat) : Nat := x
-
--- § 1  Concrete lengths
-@[simp] theorem ostinato_length : ostinato.length = 4 := by native_decide
-@[simp] theorem themeA_length   : themeA.length   = 8 := by native_decide
-@[simp] theorem themeB_length   : themeB.length   = 8 := by native_decide
-theorem themes_equal_length    : themeA.length = themeB.length     := by native_decide
-theorem themes_double_ostinato : themeA.length = 2 * ostinato.length := by native_decide
-
--- § 2  repeatScore algebra
-theorem repeatScore_zero (s : List PNote) : repeatScore 0 s = [] := rfl
-theorem repeatScore_one  (s : List PNote) : repeatScore 1 s = s  := List.append_nil s
-private lemma repeatScore_succ (n : Nat) (s : List PNote) :
-    repeatScore (n + 1) s = s ++ repeatScore n s := rfl
-theorem repeatScore_length (n : Nat) (s : List PNote) :
-    (repeatScore n s).length = n * s.length := by
-  induction n with
-  | zero => rfl
-  | succ n ih => rw [repeatScore_succ, List.length_append, ih]; omega
-theorem repeatScore_append (m n : Nat) (s : List PNote) :
-    repeatScore (m + n) s = repeatScore m s ++ repeatScore n s := by
-  induction m with
-  | zero => rfl
-  | succ m ih =>
-    have h : m + 1 + n = (m + n) + 1 := by omega
-    rw [h, repeatScore_succ, repeatScore_succ, ih, ← List.append_assoc]
-
--- § 3  Full score
-theorem boleroScore_length : boleroScore.length = 720 := by native_decide
-
--- § 4  Dynamics
-theorem crescendo_monotonic :
-    ∀ i, dynamic (layer i) < dynamic (layer (i + 1)) := by
-  intro i; simp [layer, dynamic]
-theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
-    dynamic (layer i) ≤ dynamic (layer j) := by
-  simp [layer, dynamic]; exact h
-
--- § 5  Axiom audit
-#print axioms crescendo_monotonic
-#print axioms repeatScore_length
-#print axioms repeatScore_append
-#print axioms boleroScore_length
-#print axioms dynamic_mono`;
+    // ── Lean code source ───────────────────────────────────────────────────
+    const LEAN_CODE_PATH = 'examples/bolero.lean';
 
     // Self-contained version for lean4web (uses direct recursion, no foldr)
     const PROOF_CODE =
@@ -229,7 +169,20 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
 #print axioms boleroScore_length
 #print axioms dynamic_mono`;
 
-    document.getElementById('leancode').value = LEAN_CODE;
+    async function loadLeanCodeFromFile() {
+      const editor = document.getElementById('leancode');
+      const hint = document.getElementById('toolbar-hint');
+      hint.textContent = `Loading ${LEAN_CODE_PATH}…`;
+      try {
+        const res = await fetch(LEAN_CODE_PATH, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        editor.value = await res.text();
+        hint.textContent = 'Edit the code and click Prove';
+      } catch (err) {
+        editor.value = '-- Could not load examples/bolero.lean\n';
+        hint.textContent = 'Failed to load bolero.lean';
+      }
+    }
 
     function extractListPNoteConstants(code) {
       const re = /^\s*def\s+([A-Za-z_][\w']*)\s*:\s*List\s+PNote\s*:=/gm;
@@ -253,9 +206,13 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
           const next = lines[i + 1] || '';
           body = next.trim();
         }
-        defs.set(name, body);
+        defs.set(name, stripInlineComment(body));
       }
       return defs;
+    }
+
+    function stripInlineComment(expr) {
+      return expr.replace(/\s+--.*$/, '').trim();
     }
 
     function stripOuterParens(expr) {
@@ -300,7 +257,7 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
     }
 
     function evaluatePNoteExpr(expr, defs, memo, stack) {
-      const s = stripOuterParens(expr);
+      const s = stripOuterParens(stripInlineComment(expr));
 
       const literal = parsePNoteLiteral(s);
       if (literal) return literal;
@@ -511,9 +468,8 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
       div.innerHTML = "";
       const VF = VexFlow;
       const w = Math.max(260, div.getBoundingClientRect().width || 340);
-      const vf = new VF.Factory({ renderer: { elementId: "score", width: w, height: 280 } });
-      const score = vf.EasyScore();
-      const system = vf.System();
+      const notesPerLine = 16;
+      const maxVisible = 64;
 
       let tokens = [];
       if (constantName && currentDefinitions.has(constantName)) {
@@ -524,16 +480,25 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
         tokens = ["c4", "d4", "e4", "f4"];
       }
 
-      const maxVisible = 16;
       const visibleTokens = tokens.slice(0, maxVisible);
       const vexNotes = visibleTokens.map(noteToVex).filter(Boolean);
       const rendered = vexNotes.length > 0 ? vexNotes : ["c4", "d4", "e4", "f4"];
+      const lineCount = Math.max(1, Math.ceil(rendered.length / notesPerLine));
+      const height = Math.max(220, 60 + lineCount * 90);
 
-      const beatValue = 4;
-      const v1 = new VF.Voice({ numBeats: rendered.length, beatValue });
-      v1.setStrict(false);
-      v1.addTickables(score.notes(rendered.map(n => `${n}/4`).join(", "), { stem: "up" }));
-      system.addStave({ voices: [v1] }).addClef("treble").addTimeSignature(`${rendered.length}/${beatValue}`);
+      const vf = new VF.Factory({ renderer: { elementId: "score", width: w, height } });
+      const score = vf.EasyScore();
+
+      for (let i = 0; i < lineCount; i++) {
+        const chunk = rendered.slice(i * notesPerLine, (i + 1) * notesPerLine);
+        const system = vf.System({ x: 10, y: 40 + i * 86, width: Math.max(120, w - 20) });
+        const voice = new VF.Voice({ numBeats: chunk.length, beatValue: 4 });
+        voice.setStrict(false);
+        voice.addTickables(score.notes(chunk.map(n => `${n}/4`).join(", "), { stem: "up" }));
+        const stave = system.addStave({ voices: [voice] });
+        if (i === 0) stave.addClef("treble");
+      }
+
       vf.draw();
 
       const svg = div.querySelector("svg");
@@ -592,7 +557,8 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
       });
     })();
 
-    window.onload = () => {
+    window.onload = async () => {
+      await loadLeanCodeFromFile();
       renderListPNoteConstants();
       prove();
     };
