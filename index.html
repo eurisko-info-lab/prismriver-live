@@ -65,6 +65,15 @@
       background:#4a90e2; border-color:#4a90e2; color:#fff;
     }
     #constants-list li.empty { color:#5b6782; }
+    #score-nav {
+      display:flex; align-items:center; gap:8px; margin:0 0 10px 0;
+      font-size:12px; color:#304366;
+    }
+    #score-nav button {
+      border:1px solid #bcd0ff; background:#fff; color:#1f2a44;
+      border-radius:6px; padding:3px 8px; font-size:12px; cursor:pointer;
+    }
+    #score-nav button:disabled { opacity:0.5; cursor:default; }
     #score { flex:1; }
     a.lean4web { color:#89b4fa; font-size:12px; text-decoration:none; margin-left:auto; }
     a.lean4web:hover { text-decoration:underline; }
@@ -92,6 +101,11 @@
       <div id="constants-panel">
         <div class="title">List PNote Constants</div>
         <ul id="constants-list"></ul>
+      </div>
+      <div id="score-nav">
+        <button id="score-prev" type="button">Prev</button>
+        <span id="score-window">Notes 1-0 of 0</span>
+        <button id="score-next" type="button">Next</button>
       </div>
       <div id="score"></div>
     </div>
@@ -298,13 +312,29 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
 
     let currentConstant = null;
     let currentDefinitions = new Map();
+    let currentPreviewOffset = 0;
+    let currentTokenCount = 0;
+    let currentMaxVisible = 64;
 
     function selectConstant(name) {
       currentConstant = name;
+      currentPreviewOffset = 0;
       document.querySelectorAll('#constants-list button').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.constant === name);
       });
       renderBolero(name);
+    }
+
+    function updateScoreNav() {
+      const total = currentTokenCount;
+      const start = total === 0 ? 0 : currentPreviewOffset + 1;
+      const end = Math.min(total, currentPreviewOffset + currentMaxVisible);
+      const prevBtn = document.getElementById('score-prev');
+      const nextBtn = document.getElementById('score-next');
+      const label = document.getElementById('score-window');
+      label.textContent = `Notes ${start}-${end} of ${total}`;
+      prevBtn.disabled = currentPreviewOffset <= 0;
+      nextBtn.disabled = currentPreviewOffset + currentMaxVisible >= total;
     }
 
     function renderListPNoteConstants() {
@@ -480,7 +510,11 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
         tokens = ["c4", "d4", "e4", "f4"];
       }
 
-      const visibleTokens = tokens.slice(0, maxVisible);
+      currentTokenCount = tokens.length;
+      currentMaxVisible = maxVisible;
+      const maxOffset = Math.max(0, tokens.length - maxVisible);
+      currentPreviewOffset = Math.min(Math.max(0, currentPreviewOffset), maxOffset);
+      const visibleTokens = tokens.slice(currentPreviewOffset, currentPreviewOffset + maxVisible);
       const vexNotes = visibleTokens.map(noteToVex).filter(Boolean);
       const rendered = vexNotes.length > 0 ? vexNotes : ["c4", "d4", "e4", "f4"];
       const lineCount = Math.max(1, Math.ceil(rendered.length / notesPerLine));
@@ -514,10 +548,14 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
           const t2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
           t2.setAttribute("x", "10"); t2.setAttribute("y", "46");
           t2.setAttribute("fill", "#555"); t2.setAttribute("font-size", "12");
-          t2.textContent = `Showing first ${maxVisible} notes of ${tokens.length}`;
+          const start = currentPreviewOffset + 1;
+          const end = Math.min(tokens.length, currentPreviewOffset + maxVisible);
+          t2.textContent = `Showing notes ${start}-${end} of ${tokens.length}`;
           svg.appendChild(t2);
         }
       }
+
+      updateScoreNav();
     }
 
     function prove() {
@@ -530,6 +568,15 @@ theorem dynamic_mono {i j : Nat} (h : i ≤ j) :
 
     // ── Resizable divider ───────────────────────────────────────────────────────
     (function() {
+      document.getElementById('score-prev').addEventListener('click', () => {
+        currentPreviewOffset = Math.max(0, currentPreviewOffset - currentMaxVisible);
+        renderBolero(currentConstant);
+      });
+      document.getElementById('score-next').addEventListener('click', () => {
+        currentPreviewOffset = currentPreviewOffset + currentMaxVisible;
+        renderBolero(currentConstant);
+      });
+
       const divider = document.getElementById('divider');
       const right = document.getElementById('right');
       let dragging = false, startX = 0, startW = 0;
